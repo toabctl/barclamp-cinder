@@ -116,7 +116,7 @@ when node[:cinder][:volume][:volume_type] == "eqlx"
   make_eqlx_volumes(node)
 when (node[:cinder][:volume][:volume_type] == "local") ||
     (unclaimed_disks.empty? && claimed_disks.empty?)
-  make_local_volume(node,volname)
+  make_loopback_volume(node,volname)
 when node[:cinder][:volume][:volume_type] == "raw"
   make_volume(node,volname,unclaimed_disks,claimed_disks)
 end
