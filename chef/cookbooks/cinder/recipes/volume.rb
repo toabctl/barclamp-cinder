@@ -19,80 +19,72 @@
 
 include_recipe "#{@cookbook_name}::common"
 
-volname = node[:cinder][:volume][:volume_name]
+def volume_exists(volname)
+  Kernel.system("vgs #{volname}")
+end
 
-def make_volumes(node,volname)
-  
-  if node[:cinder][:volume][:volume_type] == "eqlx"
-    Chef::Log.info("Cinder: Using eqlx volumes.")
-    package("python-paramiko")
-    #TODO(agordeev): use path_spec not hardcode
-    if node[:cinder][:use_gitrepo]
-      eqlx_path = "/opt/cinder/cinder/volume/eqlx.py"
-    else
-      eqlx_path = "/usr/lib/python2.7/dist-packages/cinder/volume/eqlx.py"
-    end
-    cookbook_file eqlx_path do
-      mode "0755"
+def make_eqlx_volumes(node)
+  Chef::Log.info("Cinder: Using eqlx volumes.")
+  package("python-paramiko")
+  #TODO(agordeev): use path_spec not hardcode
+  if node[:cinder][:use_gitrepo]
+    eqlx_path = "/opt/cinder/cinder/volume/eqlx.py"
+  else
+    eqlx_path = "/usr/lib/python2.7/dist-packages/cinder/volume/eqlx.py"
+  end
+  cookbook_file eqlx_path do
+    mode "0755"
     source "eqlx.py"
-    end
-    return
   end
-  
-  if Kernel.system("vgs #{volname}")
-    Chef::Log.info("Cinder: Volume group #{volname} already exists.")
-    return
-  end
-  unclaimed_disks = BarclampLibrary::Barclamp::Inventory::Disk.unclaimed(node)
-  claimed_disks = BarclampLibrary::Barclamp::Inventory::Disk.claimed(node,"Cinder")
-  
-  if (node[:cinder][:volume][:volume_type] == "local") || (unclaimed_disks.empty? && claimed_disks.empty?)
-    Chef::Log.info("Cinder: Using local file volume backing")
-    # only OS disk is exists, will use file storage
-    fname = node["cinder"]["volume"]["local_file"]
-    fdir = ::File.dirname(fname)
-    fsize = node["cinder"]["volume"]["local_size"] * 1024 * 1024 * 1024 # Convert from GB to Bytes
+end
 
-    # this code will be executed at compile-time so we have to use ruby block
-    # or get fs capacity from parent directory because at compile-time we have
-    # no package resources done
-    # creating enclosing directory and user/group here bypassing packages looks like
-    # a bad idea. I'm not sure about postinstall behavior of cinder package.
-    # Cap size at 90% of free space
-    encl_dir=fdir
-    while not File.directory?(encl_dir)
-      encl_dir=encl_dir.sub(/\/[^\/]*$/,'')
+def make_loopback_volume(node,volname)
+  return if volume_exists(volname)
+  Chef::Log.info("Cinder: Using local file volume backing")
+  node[:cinder][:volume][:volume_type] = "local"
+  fname = node["cinder"]["volume"]["local_file"]
+  fdir = ::File.dirname(fname)
+  fsize = node["cinder"]["volume"]["local_size"] * 1024 * 1024 * 1024 # Convert from GB to Bytes
+  # this code will be executed at compile-time so we have to use ruby block
+  # or get fs capacity from parent directory because at compile-time we have
+  # no package resources done
+  # creating enclosing directory and user/group here bypassing packages looks like
+  # a bad idea. I'm not sure about postinstall behavior of cinder package.
+  # Cap size at 90% of free space
+  encl_dir=fdir
+  while not File.directory?(encl_dir)
+    encl_dir=encl_dir.sub(/\/[^\/]*$/,'')
+  end
+  max_fsize = ((`df -Pk #{encl_dir}`.split("\n")[1].split(" ")[3].to_i * 1024) * 0.90).to_i rescue 0
+  fsize = max_fsize if fsize > max_fsize
+
+  bash "create local volume file" do
+    code "truncate -s #{fsize} #{fname}"
+    not_if do
+      File.exists?(fname)
     end
-    max_fsize = ((`df -Pk #{encl_dir}`.split("\n")[1].split(" ")[3].to_i * 1024) * 0.90).to_i rescue 0
-    fsize = max_fsize if fsize > max_fsize
-    
-    bash "create local volume file" do
-      code "truncate -s #{fsize} #{fname}"
-      not_if do
-        File.exists?(fname)
-      end
-    end
-    
-    bash "setup loop device for volume" do
-      code "losetup -f --show #{fname}"
-      not_if "losetup -j #{fname} | grep #{fname}"
-    end
-    
-    bash "create volume group" do
-      code "vgcreate #{volname} `losetup -j #{fname} | cut -f1 -d:`"
-      not_if "vgs #{volname}"
-    end
-    return
-  elsif claimed_disks.empty?
-    Chef::Log.info("Cinder: Using raw disks for volume backing.")
-    raw_mode = node[:cinder][:volume][:cinder_raw_method]
-    if raw_mode == "first"
-      raw_list = [unclaimed_disks.first]
-    else
-      raw_list = unclaimed_disks
-    end
-    # Now, we have the final list of devices to claim, so claim them
-    claimed_disks = unclaimed_disks.select do |d|
+  end
+
+  bash "setup loop device for volume" do
+    code "losetup -f --show #{fname}"
+    not_if "losetup -j #{fname} | grep #{fname}"
+  end
+
+  bash "create volume group" do
+    code "vgcreate #{volname} `losetup -j #{fname} | cut -f1 -d:`"
+    not_if "vgs #{volname}"
+  end
+end
+
+def make_volume(node,volname,unclaimed_disks,claimed_disks)
+  return if volume_exists(volname)
+  Chef::Log.info("Cinder: Using raw disks for volume backing.")
+  if claimed_disks.empty?
+    claimed_disks = if node[:cinder][:volume][:cinder_raw_method] == "first"
+                      [unclaimed_disks.first]
+                    else
+                      unclaimed_disks
+                    end.select do |d|
       if d.claim("Cinder")
         Chef::Log.info("Cinder: Claimed #{d.name}")
         true
@@ -102,7 +94,6 @@ def make_volumes(node,volname)
       end
     end
   end
-  # Now are disks are claimed.  Have our way with them.
   claimed_disks.each do |disk|
     bash "Create physical volume on #{disk.name}" do
       code "pvcreate -f #{disk.name}"
@@ -116,7 +107,19 @@ def make_volumes(node,volname)
   end
 end
 
-make_volumes(node,volname)
+volname = node[:cinder][:volume][:volume_name]
+unclaimed_disks = BarclampLibrary::Barclamp::Inventory::Disk.unclaimed(node)
+claimed_disks = BarclampLibrary::Barclamp::Inventory::Disk.claimed(node,"Cinder")
+
+case
+when node[:cinder][:volume][:volume_type] == "eqlx"
+  make_eqlx_volumes(node)
+when (node[:cinder][:volume][:volume_type] == "local") ||
+    (unclaimed_disks.empty? && claimed_disks.empty?)
+  make_loopback_volume(node,volname)
+when node[:cinder][:volume][:volume_type] == "raw"
+  make_volume(node,volname,unclaimed_disks,claimed_disks)
+end
 
 package "tgt"
 if node[:cinder][:use_gitrepo]
