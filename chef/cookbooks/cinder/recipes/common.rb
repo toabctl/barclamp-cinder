@@ -135,17 +135,11 @@ rabbit_settings = {
 
 if node[:cinder][:volume][:volume_type] == "eqlx"
   Chef::Log.info("Pushing EQLX params to cinder.conf template")
-  eqlx_params = node[:nova][:volume][:eqlx]
+  eqlx_params = node[:cinder][:volume][:eqlx]
 else
   eqlx_params = nil
 end
 
-if node[:cinder][:volume][:volume_type] == "eqlx"
-  Chef::Log.info("Pushing EQLX params to cinder.conf template")
-  eqlx_params = node[:nova][:volume][:eqlx]
-else
-  eqlx_params = nil
-end
 
 template "/etc/cinder/cinder.conf" do
   source "cinder.conf.erb"
