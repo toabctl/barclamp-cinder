@@ -79,7 +79,10 @@ end
 def make_volume(node,volname,unclaimed_disks,claimed_disks)
   return if volume_exists(volname)
   Chef::Log.info("Cinder: Using raw disks for volume backing.")
-  if claimed_disks.empty?
+  if (unclaimed_disks.empty? && claimed_disks.empty?)
+    Chef::Log.fatal("There are no suitable disks for cinder")
+    raise "There are no suitable disks for cinder"
+  elsif claimed_disks.empty?
     claimed_disks = if node[:cinder][:volume][:cinder_raw_method] == "first"
                       [unclaimed_disks.first]
                     else
@@ -114,8 +117,7 @@ claimed_disks = BarclampLibrary::Barclamp::Inventory::Disk.claimed(node,"Cinder"
 case
 when node[:cinder][:volume][:volume_type] == "eqlx"
   make_eqlx_volumes(node)
-when (node[:cinder][:volume][:volume_type] == "local") ||
-    (unclaimed_disks.empty? && claimed_disks.empty?)
+when (node[:cinder][:volume][:volume_type] == "local")
   make_loopback_volume(node,volname)
 when node[:cinder][:volume][:volume_type] == "raw"
   make_volume(node,volname,unclaimed_disks,claimed_disks)
