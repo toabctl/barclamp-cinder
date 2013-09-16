@@ -80,7 +80,7 @@ def make_volume(node,volname,unclaimed_disks,claimed_disks)
   return if volume_exists(volname)
   Chef::Log.info("Cinder: Using raw disks for volume backing.")
   if (unclaimed_disks.empty? && claimed_disks.empty?)
-    Chef::Log.fatal("There is no suitable disks for cinder")
+    Chef::Log.fatal("There are no suitable disks for cinder")
     raise "There is no suitable disks for cinder"
   elsif claimed_disks.empty?
     claimed_disks = if node[:cinder][:volume][:cinder_raw_method] == "first"
