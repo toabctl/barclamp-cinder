@@ -53,6 +53,7 @@ debs:
     - cinder-volume
     - python-cinder
     - python-keystone
+    - qemu-utils
 
 locale_additions:
   en:
