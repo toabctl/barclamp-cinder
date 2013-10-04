@@ -79,7 +79,7 @@
         %label{ :for => :raw_header }= t('.volume_disk_parameters')
         %div.container
           %label{ :for => :cinder_raw_method }= t('.volume_raw_mode')
-          = select_tag :cinder_raw_method, options_for_select([['first','first'], ['all', 'all']], @proposal.raw_data['attributes'][@proposal.barclamp]["volume"]["cinder_raw_method"].to_s), :onchange => "update_value('volume/cinder_raw_method', 'cinder_raw_method', 'string')"
+          = select_tag :cinder_raw_method, options_for_select([['all', 'all']], @proposal.raw_data['attributes'][@proposal.barclamp]["volume"]["cinder_raw_method"].to_s), :onchange => "update_value('volume/cinder_raw_method', 'cinder_raw_method', 'string')"
     = render 'barclamp/git/pfsdeps.html.haml'
 
 
