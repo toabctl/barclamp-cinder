@@ -19,4 +19,6 @@
 
 include_recipe "#{@cookbook_name}::common"
 
+package_name "qemu-utils" if node.platform == "ubuntu"
+
 cinder_service("scheduler")
