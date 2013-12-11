@@ -147,7 +147,7 @@ end
 
 make_volumes(node,volname)
 
-unless %w(redhat centos).include?(node.platform) 
+unless %w(redhat centos).include?(node.platform)
  package "tgt"
 else
  package "scsi-target-utils"
@@ -164,6 +164,12 @@ elsif %w(redhat centos suse).include?(node.platform)
   cookbook_file "/etc/tgt/targets.conf" do
     source "cinder-volume.conf"
     notifies :restart, "service[tgt]" if %w(redhat centos).include?(node.platform)
+  end
+end
+
+if %w(suse).include? node.platform
+  service "boot.lvm" do
+    action [:enable]
   end
 end
 
