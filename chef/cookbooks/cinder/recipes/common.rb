@@ -16,11 +16,16 @@
 # Recipe:: common
 #
 
-if node[:cinder][:use_gitrepo] 
+
+if node[:cinder][:use_gitrepo]
   cinder_path = "/opt/cinder"
- 
+  venv_path = node[:cinder][:use_virtualenv] ? "#{cinder_path}/.venv" : nil
+  venv_prefix = node[:cinder][:use_virtualenv] ? ". #{venv_path}/bin/activate &&" : nil
+
   pfs_and_install_deps "cinder" do
+    wrap_bins [ "cinder-rootwrap" ]
     path cinder_path
+    virtualenv venv_path
   end
 
   create_user_and_dirs "cinder" do
@@ -67,8 +72,13 @@ if node[:cinder][:use_gitrepo]
     not_if {File.exists?("/etc/cinder/rootwrap.d")}
   end
 else
-  package "cinder-common"
-  package "python-cinder"
+  unless %w(redhat centos suse).include?(node.platform)
+    package "cinder-common"
+    package "python-mysqldb"
+    package "python-cinder"
+  else
+    package "openstack-cinder"
+  end
 end
 
 glance_env_filter = " AND glance_config_environment:glance-config-#{node[:cinder][:glance_instance]}"
@@ -77,34 +87,57 @@ glance_servers = search(:node, "roles:glance-server#{glance_env_filter}") || []
 if glance_servers.length > 0
   glance_server = glance_servers[0]
   glance_server = node if glance_server.name == node.name
-  glance_server_ip = Chef::Recipe::Barclamp::Inventory.get_network_by_type(glance_server, "admin").address
+  glance_server_host = glance_server[:fqdn]
+  glance_server_protocol = glance_server[:glance][:api][:protocol]
   glance_server_port = glance_server[:glance][:api][:bind_port]
+  glance_server_insecure = glance_server_protocol == 'https' && glance_server[:glance][:ssl][:insecure]
 else
-  glance_server_ip = nil
+  glance_server_host = nil
   glance_server_port = nil
+  glance_server_protocol = nil
+  glance_server_insecure = nil
 end
-Chef::Log.info("Glance server at #{glance_server_ip}")
+Chef::Log.info("Glance server at #{glance_server_host}")
 
-mysql_env_filter = " AND mysql_config_environment:mysql-config-#{node[:cinder][:db][:mysql_instance]}"
-mysqls = search(:node, "roles:mysql-server#{mysql_env_filter}")
-if mysqls.length > 0
-  mysql = mysqls[0]
-  mysql = node if mysql.name == node.name
+sql_env_filter = " AND database_config_environment:database-config-#{node[:cinder][:database_instance]}"
+sqls = search(:node, "roles:database-server#{sql_env_filter}")
+if sqls.length > 0
+  sql = sqls[0]
+  sql = node if sql.name == node.name
 else
-  mysql = node
+  sql = node
 end
 
-mysql_address = Chef::Recipe::Barclamp::Inventory.get_network_by_type(mysql, "admin").address if mysql_address.nil?
-Chef::Log.info("Mysql server found at #{mysql_address}")
+sql_address = Chef::Recipe::Barclamp::Inventory.get_network_by_type(sql, "admin").address if sql_address.nil?
+Chef::Log.info("SQL server found at #{sql_address}")
 
-sql_connection = "mysql://#{node[:cinder][:db][:user]}:#{node[:cinder][:db][:password]}@#{mysql_address}/#{node[:cinder][:db][:database]}"
+include_recipe "database::client"
+backend_name = Chef::Recipe::Database::Util.get_backend_name(sql)
+include_recipe "#{backend_name}::client"
+include_recipe "#{backend_name}::python-client"
+
+db_password = ''
+if node.roles.include? "cinder-controller"
+  ::Chef::Recipe.send(:include, Opscode::OpenSSL::Password)
+  node.set_unless[:cinder][:db][:password] = secure_password
+  db_password = node[:cinder][:db][:password]
+else
+  # pickup password to database from cinder-controller node
+  node_controllers = search(:node, "roles:cinder-controller") || []
+  if node_controllers.length > 0
+    db_password = node_controllers[0][:cinder][:db][:password]
+  end
+end
+
+sql_connection = "#{backend_name}://#{node[:cinder][:db][:user]}:#{db_password}@#{sql_address}/#{node[:cinder][:db][:database]}"
 
 my_ipaddress = Chef::Recipe::Barclamp::Inventory.get_network_by_type(node, "admin").address
-node[:glance][:api][:bind_host] = my_ipaddress
+node[:cinder][:api][:bind_host] = my_ipaddress
 
 node[:cinder][:my_ip] = my_ipaddress
 
-rabbits = search(:node, "recipes:nova\\:\\:rabbit") || []
+rabbitmq_env_filter = " AND rabbitmq_config_environment:rabbitmq-config-#{node[:cinder][:rabbitmq_instance]}"
+rabbits = search(:node, "roles:rabbitmq-server#{rabbitmq_env_filter}") || []
 if rabbits.length > 0
   rabbit = rabbits[0]
   rabbit = node if rabbit.name == node.name
@@ -113,26 +146,130 @@ else
 end
 rabbit_address = Chef::Recipe::Barclamp::Inventory.get_network_by_type(rabbit, "admin").address
 Chef::Log.info("Rabbit server found at #{rabbit_address}")
-if rabbit[:nova]
-  #agordeev:
-  # rabbit settings will work only after nova proposal be deployed
-  # and cinder services will be restarted then
-  rabbit_settings = {
-    :address => rabbit_address,
-    :port => rabbit[:nova][:rabbit][:port],
-    :user => rabbit[:nova][:rabbit][:user],
-    :password => rabbit[:nova][:rabbit][:password],
-    :vhost => rabbit[:nova][:rabbit][:vhost]
-  }
-else
-  rabbit_settings = nil
-end
+rabbit_settings = {
+  :address => rabbit_address,
+  :port => rabbit[:rabbitmq][:port],
+  :user => rabbit[:rabbitmq][:user],
+  :password => rabbit[:rabbitmq][:password],
+  :vhost => rabbit[:rabbitmq][:vhost]
+}
 
 if node[:cinder][:volume][:volume_type] == "eqlx"
   Chef::Log.info("Pushing EQLX params to cinder.conf template")
-  eqlx_params = node[:nova][:volume][:eqlx]
+  eqlx_params = node[:cinder][:volume][:eqlx]
 else
   eqlx_params = nil
+end
+
+if node[:cinder][:volume][:volume_type] == "netapp"
+  Chef::Log.info("Pushing NetApp params to cinder.conf template")
+  netapp_params = node[:cinder][:volume][:netapp]
+else
+  netapp_params = nil
+end
+
+if node[:cinder][:volume][:volume_type] == "emc"
+  Chef::Log.info("Pushing EMC params to cinder.conf template")
+  emc_params = node[:cinder][:volume][:emc]
+
+  template "/etc/cinder/cinder_emc_config.xml" do
+    source "cinder_emc_config.xml.erb"
+    owner node[:cinder][:user]
+    group "root"
+    mode 0640
+    variables(
+              :emc_params => emc_params
+             )
+  end
+else
+  emc_params = nil
+end
+
+if node[:cinder][:volume][:volume_type] == "rbd"
+  Chef::Log.info("Pushing Rbd params to cinder.conf template")
+  rbd_params = node[:cinder][:volume][:rbd]
+
+  if node[:platform] == "suse"
+    package "ceph"
+    package "ceph-kmp-default"
+  end
+
+else
+  rbd_params = nil
+end
+
+if node[:cinder][:volume][:volume_type] == "manual"
+  Chef::Log.info("Pushing manual params to cinder.conf template")
+  manual_driver = node[:cinder][:volume][:manual][:driver]
+  manual_driver_config = node[:cinder][:volume][:manual][:config]
+else
+  manual_driver = nil
+  manual_driver_config = nil
+end
+
+if node[:cinder][:api][:protocol] == 'https'
+  if node[:cinder][:ssl][:generate_certs]
+    package "openssl"
+    ruby_block "generate_certs for cinder" do
+      block do
+        unless ::File.exists? node[:cinder][:ssl][:certfile] and ::File.exists? node[:cinder][:ssl][:keyfile]
+          require "fileutils"
+
+          Chef::Log.info("Generating SSL certificate for cinder...")
+
+          [:certfile, :keyfile].each do |k|
+            dir = File.dirname(node[:cinder][:ssl][k])
+            FileUtils.mkdir_p(dir) unless File.exists?(dir)
+          end
+
+          # Generate private key
+          %x(openssl genrsa -out #{node[:cinder][:ssl][:keyfile]} 4096)
+          if $?.exitstatus != 0
+            message = "SSL private key generation failed"
+            Chef::Log.fatal(message)
+            raise message
+          end
+          FileUtils.chown "root", node[:cinder][:group], node[:cinder][:ssl][:keyfile]
+          FileUtils.chmod 0640, node[:cinder][:ssl][:keyfile]
+
+          # Generate certificate signing requests (CSR)
+          conf_dir = File.dirname node[:cinder][:ssl][:certfile]
+          ssl_csr_file = "#{conf_dir}/signing_key.csr"
+          ssl_subject = "\"/C=US/ST=Unset/L=Unset/O=Unset/CN=#{node[:fqdn]}\""
+          %x(openssl req -new -key #{node[:cinder][:ssl][:keyfile]} -out #{ssl_csr_file} -subj #{ssl_subject})
+          if $?.exitstatus != 0
+            message = "SSL certificate signed requests generation failed"
+            Chef::Log.fatal(message)
+            raise message
+          end
+
+          # Generate self-signed certificate with above CSR
+          %x(openssl x509 -req -days 3650 -in #{ssl_csr_file} -signkey #{node[:cinder][:ssl][:keyfile]} -out #{node[:cinder][:ssl][:certfile]})
+          if $?.exitstatus != 0
+            message = "SSL self-signed certificate generation failed"
+            Chef::Log.fatal(message)
+            raise message
+          end
+
+          File.delete ssl_csr_file  # Nobody should even try to use this
+        end # unless files exist
+      end # block
+    end # ruby_block
+  else # if generate_certs
+    unless ::File.exists? node[:cinder][:ssl][:certfile]
+      message = "Certificate \"#{node[:cinder][:ssl][:certfile]}\" is not present."
+      Chef::Log.fatal(message)
+      raise message
+    end
+    # we do not check for existence of keyfile, as the private key is allowed
+    # to be in the certfile
+  end # if generate_certs
+
+  if node[:cinder][:ssl][:cert_required] and !::File.exists? node[:cinder][:ssl][:ca_certs]
+    message = "Certificate CA \"#{node[:cinder][:ssl][:ca_certs]}\" is not present."
+    Chef::Log.fatal(message)
+    raise message
+  end
 end
 
 template "/etc/cinder/cinder.conf" do
@@ -142,10 +279,17 @@ template "/etc/cinder/cinder.conf" do
   mode 0640
   variables(
             :eqlx_params => eqlx_params,
+            :emc_params => emc_params,
+            :rbd_params => rbd_params,
+            :netapp_params => netapp_params,
+            :manual_driver => manual_driver,
+            :manual_driver_config => manual_driver_config,
             :sql_connection => sql_connection,
             :rabbit_settings => rabbit_settings,
-            :glance_server_ip => glance_server_ip,
-            :glance_server_port => glance_server_port
+            :glance_server_protocol => glance_server_protocol,
+            :glance_server_host => glance_server_host,
+            :glance_server_port => glance_server_port,
+            :glance_server_insecure => glance_server_insecure
             )
 end
 

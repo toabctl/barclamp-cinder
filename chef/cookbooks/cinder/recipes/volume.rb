@@ -19,87 +19,12 @@
 
 include_recipe "#{@cookbook_name}::common"
 
-volname = node[:cinder][:volume][:volume_name]
-
-checked_disks = []
-
-node[:crowbar][:disks].each do |disk, data|
-  checked_disks << disk if File.exists?("/dev/#{disk}") and data["usage"] == "Storage"
+def volume_exists(volname)
+  Kernel.system("vgs #{volname}")
 end
 
-if checked_disks.empty? or node[:cinder][:volume][:volume_type] == "local"
-  # only OS disk is exists, will use file storage
-  fname = node["cinder"]["volume"]["local_file"]
-  fdir = ::File.dirname(fname)
-  fsize = node["cinder"]["volume"]["local_size"] * 1024 * 1024 * 1024 # Convert from GB to Bytes
-
-  # Cap size at 90% of free space
-  max_fsize = ((`df -Pk #{fdir}`.split("\n")[1].split(" ")[3].to_i * 1024) * 0.90).to_i rescue 0
-  fsize = max_fsize if fsize > max_fsize
-
-  bash "create local volume file" do
-    code "truncate -s #{fsize} #{fname}"
-    not_if do
-      File.exists?(fname)
-    end
-  end
-
-  bash "setup loop device for volume" do
-    code "losetup -f --show #{fname}"
-    not_if "losetup -j #{fname} | grep #{fname}"
-  end
-
-  bash "create volume group" do
-    code "vgcreate #{volname} `losetup -j #{fname} | cut -f1 -d:`"
-    not_if "vgs #{volname}"
-  end
-
-elsif node[:cinder][:volume][:volume_type] == "eqlx"
-  # do nothing on the host
-else
-  raw_mode = node[:cinder][:volume][:cinder_raw_method]
-  raw_list = node[:cinder][:volume][:cinder_volume_disks]
-  # if all, then just use the checked_list
-  raw_list = checked_disks if raw_mode == "all"
-
-  if raw_list.empty? or raw_mode == "first"
-    # use first non-OS disk for vg
-    dname = "/dev/#{checked_disks.first}"
-    bash "wipe partitions" do
-      code "dd if=/dev/zero of=#{dname} bs=1024 count=1"
-      not_if "vgs #{volname}"
-    end
-  else
-    # use this disk list
-    disk_list = []
-    raw_list.each do |disk|
-      disk_list << "/dev/#{disk}" if checked_disks.include?(disk)
-      bash "wipe partitions #{disk}" do
-        code "dd if=/dev/zero of=#{disk} bs=1024 count=1"
-        not_if "vgs #{volname}"
-      end
-    end
-    raise "Can't access any disk from the given list" if disk_list.empty?
-    dname = disk_list.join(' ')
-  end
-
-  bash "create physical volume" do
-    code "pvcreate #{dname}"
-    not_if "pvs #{dname}"
-  end
-
-  bash "create volume group" do
-    code "vgcreate #{volname} #{dname}"
-    not_if "vgs #{volname}"
-  end
-
-end
-
-#
-# Put EQLX driver
-# It's kinda hacky
-#
-if node[:cinder][:volume][:volume_type] == "eqlx"
+def make_eqlx_volumes(node)
+  Chef::Log.info("Cinder: Using eqlx volumes.")
   package("python-paramiko")
   #TODO(agordeev): use path_spec not hardcode
   if node[:cinder][:use_gitrepo]
@@ -113,7 +38,114 @@ if node[:cinder][:volume][:volume_type] == "eqlx"
   end
 end
 
-package "tgt"
+def make_loopback_volume(node,volname)
+  return if volume_exists(volname)
+  Chef::Log.info("Cinder: Using local file volume backing")
+  node[:cinder][:volume][:volume_type] = "local"
+  fname = node["cinder"]["volume"]["local_file"]
+  fdir = ::File.dirname(fname)
+  fsize = node["cinder"]["volume"]["local_size"] * 1024 * 1024 * 1024 # Convert from GB to Bytes
+  # this code will be executed at compile-time so we have to use ruby block
+  # or get fs capacity from parent directory because at compile-time we have
+  # no package resources done
+  # creating enclosing directory and user/group here bypassing packages looks like
+  # a bad idea. I'm not sure about postinstall behavior of cinder package.
+  # Cap size at 90% of free space
+  encl_dir=fdir
+  while not File.directory?(encl_dir)
+    encl_dir=encl_dir.sub(/\/[^\/]*$/,'')
+  end
+  max_fsize = ((`df -Pk #{encl_dir}`.split("\n")[1].split(" ")[3].to_i * 1024) * 0.90).to_i rescue 0
+  fsize = max_fsize if fsize > max_fsize
+
+  bash "create local volume file" do
+    code "truncate -s #{fsize} #{fname}"
+    not_if do
+      File.exists?(fname)
+    end
+  end
+
+  template "boot.looplvm" do
+    path "/etc/init.d/boot.looplvm"
+    source "boot.looplvm.erb"
+    owner "root"
+    group "root"
+    mode 0755
+    variables(:loop_lvm_path => fname)
+    notifies :reload, "service[boot.looplvm]", :immediately
+  end
+
+  service "boot.looplvm" do
+    supports :start => true, :stop => true
+    action [:enable, :start]
+  end
+
+  bash "create volume group" do
+    code "vgcreate #{volname} `losetup -j #{fname} | cut -f1 -d:`"
+    not_if "vgs #{volname}"
+  end
+end
+
+def make_volume(node,volname,unclaimed_disks,claimed_disks)
+  return if volume_exists(volname)
+  Chef::Log.info("Cinder: Using raw disks for volume backing.")
+  if (unclaimed_disks.empty? && claimed_disks.empty?)
+    Chef::Log.fatal("There are no suitable disks for cinder")
+    raise "There are no suitable disks for cinder"
+  elsif claimed_disks.empty?
+    claimed_disks = if node[:cinder][:volume][:cinder_raw_method] == "first"
+                      [unclaimed_disks.first]
+                    else
+                      unclaimed_disks
+                    end.select do |d|
+      if d.claim("Cinder")
+        Chef::Log.info("Cinder: Claimed #{d.name}")
+        true
+      else
+        Chef::Log.info("Cinder: Ignoring #{d.name}")
+        false
+      end
+    end
+  end
+  claimed_disks.each do |disk|
+    bash "Create physical volume on #{disk.name}" do
+      code <<-EOH
+      dd if=/dev/zero of=#{disk.name} bs=1024 count=10
+      blockdev --rereadpt  #{disk.name}
+      pvcreate -f #{disk.name}
+      EOH
+      not_if "pvs #{disk.name}"
+    end
+  end
+  # Make our volume group.
+  bash "Create volume group #{volname}" do
+    code "vgcreate #{volname} #{claimed_disks.map{|d|d.name}.join(' ')}"
+    not_if "vgs #{volname}"
+  end
+end
+
+volname = node[:cinder][:volume][:volume_name]
+unclaimed_disks = BarclampLibrary::Barclamp::Inventory::Disk.unclaimed(node)
+claimed_disks = BarclampLibrary::Barclamp::Inventory::Disk.claimed(node,"Cinder")
+
+case
+when node[:cinder][:volume][:volume_type] == "eqlx"
+  make_eqlx_volumes(node)
+when (node[:cinder][:volume][:volume_type] == "local")
+  make_loopback_volume(node,volname)
+when node[:cinder][:volume][:volume_type] == "raw"
+  make_volume(node,volname,unclaimed_disks,claimed_disks)
+when node[:cinder][:volume][:volume_type] == "netapp"
+  #TODO(dmueller) Verify that OnCommand is installed?
+when node[:cinder][:volume][:volume_type] == "emc"
+when node[:cinder][:volume][:volume_type] == "manual"
+end
+
+unless %w(redhat centos).include?(node.platform) 
+ package "tgt"
+else
+ package "scsi-target-utils"
+end
 if node[:cinder][:use_gitrepo]
   #TODO(agordeev):
   # tgt will not work with iSCSI targets if it has the same configs in conf.d
@@ -122,21 +154,31 @@ if node[:cinder][:use_gitrepo]
   cookbook_file "/etc/tgt/conf.d/cinder-volume.conf" do
     source "cinder-volume.conf"
   end
+elsif %w(redhat centos suse).include?(node.platform)
+  cookbook_file "/etc/tgt/targets.conf" do
+    source "cinder-volume.conf"
+    notifies :restart, "service[tgt]" if %w(redhat centos).include?(node.platform)
+  end
 end
 
 cinder_service("volume")
 
 # Restart doesn't work correct for this service.
 bash "restart-tgt_#{@cookbook_name}" do
-  code <<-EOH
-    stop tgt
-    start tgt
+  unless %w(redhat centos suse).include?(node.platform)
+    code <<-EOH
+      stop tgt
+      start tgt
 EOH
+  else
+    code "service tgtd stop; service tgtd start"
+  end
   action :nothing
 end
 
 service "tgt" do
   supports :status => true, :restart => true, :reload => true
   action :enable
+  service_name "tgtd" if %w(redhat centos suse).include?(node.platform)
   notifies :run, "bash[restart-tgt_#{@cookbook_name}]"
 end

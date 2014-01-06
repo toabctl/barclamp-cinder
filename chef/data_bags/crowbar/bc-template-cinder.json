@@ -3,19 +3,21 @@
   "description": "Installation for Cinder",
   "attributes": {
     "cinder": {
-      "debug": true,
-      "verbose": true,
+      "debug": false,
+      "verbose": false,
+      "use_syslog": false,
+      "rabbitmq_instance": "none",
       "keystone_instance": "none",
       "glance_instance": "none",
-      "mysql_instance": "none",
-      "user": "cinder",
+      "database_instance": "none",
       "service_user": "cinder",
       "service_password": "",
       "gitrepo": "http://github.com/openstack/cinder.git",
       "git_instance": "",
-      "git_refspec": "stable/folsom",
-      "use_gitrepo": true,
+      "git_refspec": "stable/grizzly",
+      "use_gitrepo": false,
       "use_gitbarclamp": true,
+      "use_virtualenv": true,
       "use_pip_cache": true,
       "pfs_deps": [
         "kpartx",
@@ -39,6 +41,7 @@
         "python-cheetah",
         "python-carrot",
         "python-tempita",
+        "python-mysqldb",
         "python-sqlalchemy",
         "python-paramiko",
         "python-iso8601",
@@ -61,16 +64,18 @@
         "python-webob",
         "pip://eventlet>=0.9.17",
         "pip://setuptools_git>=0.4",
-        "pip://python-quantumclient>=2.0",
+        "pip://python-neutronclient>=2.0",
         "pip://python-glanceclient>=0.5.0,<2",
+        "pip://python-swiftclient>=1,<2",
         "pip://python-novaclient",
-        "pip://python-keystoneclient"
+        "pip://python-keystoneclient",
+        "pip://Babel>=0.9.6",
+        "pip://stevedore>=0.8.0"
       ],
       "volume": {
         "volume_name": "cinder-volumes",
         "volume_type": "raw",
         "cinder_raw_method": "all",
-        "cinder_volume_disks": [],
         "local_file": "/var/lib/cinder/volume.raw",
         "local_size": 2000,
         "eqlx": {
@@ -85,11 +90,49 @@
           "eqlx_ssh_keepalive_interval": 1200,
           "eqlx_cli_timeout": 30,
           "eqlx_pool": "default"
+        },
+        "netapp": {
+          "netapp_driver": "cinder.volume.drivers.netapp.iscsi.NetAppDirect7modeISCSIDriver",
+          "netapp_wsdl_url": "http://192.168.124.11:8088/",
+          "netapp_server_hostname": "192.168.124.11",
+          "netapp_server_port": 443,
+          "netapp_login": "admin",
+          "netapp_password": "admin",
+          "netapp_storage_service": "",
+          "netapp_storage_service_prefix": "crowbar_",
+          "netapp_vfiler": "",
+          "netapp_transport_type": "https",
+          "netapp_volume_list": ""
+        },
+        "emc": {
+          "emc_storage_type": "",
+          "ecom_server_ip": "192.168.124.11",
+          "ecom_server_port": 0,
+          "ecom_server_username": "admin",
+          "ecom_server_password": "admin"
+        },
+        "rbd": {
+          "pool": "volumes",
+          "user": "volumes",
+          "secret_uuid": ""
+        },
+        "manual": {
+          "driver": "",
+          "config": ""
         }
       },
       "api": {
+        "protocol": "http",
         "bind_open_address": true,
         "bind_port": 8776
+      },
+      "ssl": {
+        "certfile": "/etc/cinder/ssl/certs/signing_cert.pem",
+        "keyfile": "/etc/cinder/ssl/private/signing_key.pem",
+        "generate_certs": false,
+        "insecure": false,
+        "cert_required": false,
+        "ca_certs": "/etc/cinder/ssl/certs/ca.pem"
       },
       "db": {
         "password": "",
@@ -102,12 +145,18 @@
     "cinder": {
       "crowbar-revision": 0,
       "element_states": {
-        "cinder-server": [ "readying", "ready", "applying" ]
+          "cinder-controller": [ "readying", "ready", "applying" ],
+          "cinder-volume": [ "readying", "ready", "applying" ]
       },
       "elements": {},
       "element_order": [
-        [ "cinder-server" ]
+          [ "cinder-controller" ],
+          [ "cinder-volume" ]
       ],
+      "element_run_list_order": {
+          "cinder-controller": 92,
+          "cinder-volume": 93
+      },
       "config": {
         "environment": "cinder-base-config",
         "mode": "full",

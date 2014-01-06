@@ -20,12 +20,15 @@ class CinderService < ServiceObject
     @logger = thelogger
   end
 
-  #if barclamp allows multiple proposals OVERRIDE
-  # def self.allow_multiple_proposals?
+# Turn off multi proposal support till it really works and people ask for it.
+  def self.allow_multiple_proposals?
+    false
+  end
+
 
   def proposal_dependencies(role)
     answer = []
-    deps = ["mysql", "keystone", "glance"]
+    deps = ["database", "keystone", "glance", "rabbitmq"]
     deps << "git" if role.default_attributes[@bc_name]["use_gitrepo"]
     deps.each do |dep|
       answer << { "barclamp" => dep, "inst" => role.default_attributes[@bc_name]["#{dep}_instance"] }
@@ -41,12 +44,27 @@ class CinderService < ServiceObject
     nodes.delete_if { |n| n.nil? or n.admin? }
     if nodes.size >= 1
       base["deployment"]["cinder"]["elements"] = {
-        "cinder-server" => [ nodes.first[:fqdn] ]
+        "cinder-controller" => [ nodes.first[:fqdn] ],
+        "cinder-volume" => [ nodes.first[:fqdn] ]
       }
     end
 
-    insts = ["Mysql", "Keystone", "Glance"]
-    insts << "Git" if base["attributes"][@bc_name]["use_gitrepo"]
+    insts = ["Database", "Keystone", "Glance", "Rabbitmq"]
+
+    base["attributes"][@bc_name]["git_instance"] = ""
+    begin
+      gitService = GitService.new(@logger)
+      gits = gitService.list_active[1]
+      if gits.empty?
+        # No actives, look for proposals
+        gits = gitService.proposals[1]
+      end
+      unless gits.empty?
+        base["attributes"][@bc_name]["git_instance"] = gits[0]
+      end
+    rescue
+      @logger.info("#{@bc_name} create_proposal: no git found")
+    end
 
     insts.each do |inst|
       base["attributes"][@bc_name]["#{inst.downcase}_instance"] = ""
@@ -63,11 +81,51 @@ class CinderService < ServiceObject
       end
     end
 
+    if base["attributes"][@bc_name]["database_instance"] == ""
+      raise(I18n.t('model.service.dependency_missing', :name => @bc_name, :dependson => "database"))
+    end
+
+    if base["attributes"][@bc_name]["keystone_instance"] == ""
+      raise(I18n.t('model.service.dependency_missing', :name => @bc_name, :dependson => "keystone"))
+    end
+
+    if base["attributes"][@bc_name]["glance_instance"] == ""
+      raise(I18n.t('model.service.dependency_missing', :name => @bc_name, :dependson => "glance"))
+    end
+
+    if base["attributes"][@bc_name]["rabbitmq_instance"] == ""
+      raise(I18n.t('model.service.dependency_missing', :name => @bc_name, :dependson => "rabbitmq"))
+    end
+
     base["attributes"]["cinder"]["service_password"] = '%012d' % rand(1e12)
-    base["attributes"]["cinder"]["db"]["password"] = random_password
 
     @logger.debug("Cinder create_proposal: exiting")
     base
+  end
+
+  def validate_proposal_after_save proposal
+    super
+    if proposal["attributes"][@bc_name]["use_gitrepo"]
+      gitService = GitService.new(@logger)
+      gits = gitService.list_active[1].to_a
+      if not gits.include?proposal["attributes"][@bc_name]["git_instance"]
+        raise(I18n.t('model.service.dependency_missing', :name => @bc_name, :dependson => "git"))
+      end
+    end
+  end
+
+
+  def apply_role_pre_chef_call(old_role, role, all_nodes)
+    @logger.debug("Cinder apply_role_pre_chef_call: entering #{all_nodes.inspect}")
+    return if all_nodes.empty?
+
+    net_svc = NetworkService.new @logger
+    tnodes = role.override_attributes["cinder"]["elements"]["cinder-controller"]
+    tnodes.each do |n|
+      net_svc.allocate_ip "default", "public", "host", n
+    end unless tnodes.nil?
+
+    @logger.debug("Cinder apply_role_pre_chef_call: leaving")
   end
 
 end

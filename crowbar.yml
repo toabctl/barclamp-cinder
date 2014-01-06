@@ -15,13 +15,12 @@
 barclamp:
   name: cinder
   display: Cinder
-  description: A way to maximize awesomeness for Cinder
-  proposal_schema_version: 1
+  description: 'Openstack Block Storage: persistent block level storage devices for use with OpenStack compute instances'
   version: 0
   requires:
     - '@crowbar'
-    - git
-    - mysql
+    - database
+    - rabbitmq
     - keystone
     - glance
   member:
@@ -33,13 +32,14 @@ crowbar:
   layout: 1
   order: 92 
   run_order: 92
-  chef_order: 100
+  chef_order: 92
+  proposal_schema_version: 2
 
 debs:
   ubuntu-12.04:
     repos:
-      - deb http://ubuntu-cloud.archive.canonical.com/ubuntu precise-updates/folsom main
-      - deb http://ubuntu-cloud.archive.canonical.com/ubuntu precise-proposed/folsom main
+      - deb http://ubuntu-cloud.archive.canonical.com/ubuntu precise-updates/havana main
+      - deb http://ubuntu-cloud.archive.canonical.com/ubuntu precise-proposed/havana main
   pkgs:
     - tgt
     - lvm2
@@ -53,6 +53,20 @@ debs:
     - cinder-volume
     - python-cinder
     - python-keystone
+    - qemu-utils
+rpms:
+  centos-6.4:
+    repos:
+      - rpm http://repos.fedorapeople.org/repos/openstack/openstack-havana/epel-6
+  redhat-6.4:
+    repos:
+      - rpm http://repos.fedorapeople.org/repos/openstack/openstack-havana/epel-6
+  pkgs:
+    - lvm2
+    - openstack-cinder
+    - python-cinder
+    - python-cinderclient
+    - scsi-target-utils
 
 locale_additions:
   en:
@@ -62,13 +76,14 @@ locale_additions:
       cinder:
         edit_attributes: 
           attributes: Attributes
-          mysql_instance: MySQL
+          rabbitmq_instance: RabbitMQ
+          database_instance: Database Instance 
           keystone_instance: Keystone
           glance_instance: Glance
-          service_user: Service user (for Keystone)
-          service_password: Service password
-          volume_header: Volume options
           volume_type: Type of Volume
+          volume_type_raw: Raw devices
+          volume_type_local: Local file
+          volume_type_manual: Other driver
           volume_name: Name of Volume
           volume_file_parameters: File-based Parameters
           volume_file_name: Volume File Name
@@ -77,8 +92,25 @@ locale_additions:
           volume_file_location: Volume File Location
           volume_disk_parameters: Disk-based Parameters
           volume_raw_mode: Disk selection method
-          cinder_volume_disks: Disks for cinder-volume storage volume group
-          eqlx_parameters: EQLX Parameters
+          emc_parameters: EMC Parameters
+          emc_storage_type: Thin pool where user wants to create volume from
+          ecom_server_ip: IP address of the ECOM server
+          ecom_server_port: Port of the ECOM server
+          ecom_server_username: Username for accessing the ECOM server
+          ecom_server_password: Password for accessing the ECOM server
+          netapp_driver: NetApp Driver Mode
+          netapp_parameters: NetApp Parameters
+          netapp_wsdl_url: WSDL URL for NetApp OnCommand Webservices
+          netapp_server_hostname: Server host name
+          netapp_server_port: Server port
+          netapp_login: Login user name
+          netapp_password: Login password
+          netapp_transport_type: NetApp Transport Type
+          netapp_storage_service: Storage service to use while provisioning
+          netapp_storage_service_prefix: Storage service prefix to use on OnCommand
+          netapp_vfiler: The vFiler unit name if using vFiler to host OpenStack volumes
+          netapp_volume_list: Comma separated volume list for provisioning
+          eqlx_parameters: EqualLogic Parameters
           eqlx_san_ip: EQLX SAN IP
           eqlx_san_login: EQLX SAN login
           eqlx_san_password: EQLX SAN password
@@ -90,8 +122,25 @@ locale_additions:
           eqlx_ssh_keepalive_interval: EQLX SSH keepalive internal
           eqlx_cli_timeout: EQLX CLI command execution timeout
           eqlx_pool: EQLX pool name
-      cinder_edit_deployment: 
+          manual_parameters: Other driver parameters
+          manual_parameters_not_supported: Manually picking a driver can be used to specify a Cinder driver not available in the list of drivers above. This is however not supported.
+          manual_volume_driver: Driver
+          manual_volume_driver_hint: For instance, cinder.volume.drivers.netapp.iscsi.NetAppISCSIDriver
+          manual_volume_config: Options
+          manual_volume_config_hint: Each line will be added to cinder.conf. If the driver needs an external file, this file must be manually uploaded.
+          ssl_header: SSL Support
+          protocol: Protocol
+          ssl_insecure: SSL Certificate is insecure (for instance, self-signed)
+          ssl_certfile: SSL Certificate File
+          ssl_keyfile: SSL (Private) Key File
+          ssl_generate_certs: Generate (self-signed) certificates (implies insecure)
+          ssl_cert_required: Require Client Certificate
+          ssl_ca_certs: SSL CA Certificates File
+          rbd_pool: RADOS pool for Cinder volumes
+          rbd_user: RADOS client name for accessing the volumes
+          rbd_secret_uuid: libvirt uuid of the secret for the rbd_uservolumes
+      cinder_edit_deployment:
         deployment: Deployment
 
 git_repo:
-  - cinder http://github.com/openstack/cinder.git stable/folsom
+  - cinder https://github.com/openstack/cinder.git stable/havana
