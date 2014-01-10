@@ -52,6 +52,10 @@ def make_volumes(node,volname)
     return
   end
 
+  if node[:cinder][:volume][:volume_type] == "rbd"
+    return
+  end 
+
   if Kernel.system("vgs #{volname}")
     Chef::Log.info("Cinder: Volume group #{volname} already exists.")
     return
