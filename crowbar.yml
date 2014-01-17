@@ -20,7 +20,7 @@ barclamp:
   requires:
     - '@crowbar'
     - database
-    - rabbitmq
+    - messaging
     - keystone
     - glance
   member:
