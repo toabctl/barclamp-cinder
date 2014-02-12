@@ -57,6 +57,10 @@
         %p
           %label{ :for => :netapp_vfiler }= t('.netapp_vfiler')
           %input#netapp_vfiler{:type => "text", :name => "netapp_vfiler", :'data-default' => @proposal.raw_data['attributes'][@proposal.barclamp]["volume"]["netapp"]["netapp_vfiler"], :onchange => "update_value('volume/netapp/netapp_vfiler', 'netapp_vfiler', 'string')"}
+        %p
+          %label{ :for => :netapp_nfs_shares }= t('.nfs_shares')
+          = text_area_tag :netapp_nfs_shares, @proposal.raw_data['attributes'][@proposal.barclamp]["volume"]["netapp"]["nfs_shares"], :size => "80x5", :onchange => "update_value('volume/netapp/nfs_shares', 'netapp_nfs_shares', 'string')"
+          %em= t('.nfs_shares_config_hint')
 
     %div{ :id => 'emc_parameters', :class => 'container' }
       %label.section-header{ :for => :emc_div }= t('.emc_parameters')

@@ -109,6 +109,8 @@ locale_additions:
           netapp_storage_service_prefix: Storage service prefix to use on OnCommand
           netapp_vfiler: The vFiler unit name if using vFiler to host OpenStack volumes
           netapp_volume_list: Comma separated volume list for provisioning
+          nfs_shares: List of Netapp NFS Exports
+          nfs_shares_config_hint: Format one entry per line in the form hostname:/vol/path optional-nfs-mount-options
           eqlx_parameters: EqualLogic Parameters
           eqlx_san_ip: EQLX SAN IP
           eqlx_san_login: EQLX SAN login
