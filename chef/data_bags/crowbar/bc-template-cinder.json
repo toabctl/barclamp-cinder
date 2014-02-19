@@ -102,7 +102,8 @@
           "netapp_storage_service_prefix": "crowbar_",
           "netapp_vfiler": "",
           "netapp_transport_type": "https",
-          "netapp_volume_list": ""
+          "netapp_volume_list": "",
+          "nfs_shares": ""
         },
         "emc": {
           "emc_storage_type": "",

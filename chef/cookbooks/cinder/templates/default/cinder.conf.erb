@@ -940,7 +940,7 @@ netapp_vfiler=<%= @netapp_params['netapp_vfiler'] %>
 #
 
 # File with the list of available nfs shares (string value)
-#nfs_shares_config=<None>
+nfs_shares_config=<%= node[:cinder][:volume][:nfs_shares] %>
 
 # Base dir where nfs expected to be mounted (string value)
 #nfs_mount_point_base=$state_path/mnt

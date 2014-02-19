@@ -40,7 +40,6 @@ def make_volumes(node,volname)
   end
 
   if node[:cinder][:volume][:volume_type] == "netapp"
-    #TODO(dmueller) Verify that OnCommand is installed?
     return
   end
 
@@ -54,7 +53,7 @@ def make_volumes(node,volname)
 
   if node[:cinder][:volume][:volume_type] == "rbd"
     return
-  end 
+  end
 
   if Kernel.system("vgs #{volname}")
     Chef::Log.info("Cinder: Volume group #{volname} already exists.")
@@ -178,6 +177,18 @@ if %w(suse).include? node.platform
 end
 
 cinder_service("volume")
+
+case
+when node[:cinder][:volume][:volume_type] == "netapp"
+  file node[:cinder][:volume][:nfs_shares] do
+    content node[:cinder][:volume][:netapp][:nfs_shares]
+    owner "root"
+    group node[:cinder][:group]
+    mode "0640"
+    action :create
+    notifies :restart, resources(:service => "cinder-volume")
+  end
+end
 
 # Restart doesn't work correct for this service.
 bash "restart-tgt_#{@cookbook_name}" do

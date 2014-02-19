@@ -64,7 +64,8 @@
                     "netapp_storage_service_prefix": { "type": "str", "required": true },
                     "netapp_vfiler": { "type": "str", "required": true },
                     "netapp_transport_type": { "type": "str", "required": true },
-                    "netapp_volume_list": { "type": "str", "required": true }
+                    "netapp_volume_list": { "type": "str", "required": true },
+                    "nfs_shares": { "type": "str" }
                   }
                 },
                 "emc": {
