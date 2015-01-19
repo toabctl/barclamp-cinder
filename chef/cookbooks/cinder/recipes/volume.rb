@@ -43,6 +43,8 @@ def make_loopback_file(node, volume)
   max_fsize = ((`df -Pk #{encl_dir}`.split("\n")[1].split(" ")[3].to_i * 1024) * 0.90).to_i rescue 0
   fsize = max_fsize if fsize > max_fsize
 
+  FileUtils.mkdir_p(fdir) unless File.exists?(fdir)
+
   bash "Create local volume file #{fname}" do
     code "truncate -s #{fsize} #{fname}"
     not_if do
