@@ -30,20 +30,15 @@ def make_loopback_file(node, volume)
   return if File.exists?(fname)
 
   fdir = ::File.dirname(fname)
-  # this code will be executed at compile-time so we have to use ruby block
-  # or get fs capacity from parent directory because at compile-time we have
-  # no package resources done
-  # creating enclosing directory and user/group here bypassing packages looks like
-  # a bad idea. I'm not sure about postinstall behavior of cinder package.
-  # Cap size at 90% of free space
-  encl_dir=fdir
-  while not File.directory?(encl_dir)
-    encl_dir=encl_dir.sub(/\/[^\/]*$/,'')
+  directory fdir do
+    owner node[:cinder][:user]
+    group node[:cinder][:group]
+    mode '0755'
+    action :create
+    not_if { File.directory?(fdir) }
   end
-  max_fsize = ((`df -Pk #{encl_dir}`.split("\n")[1].split(" ")[3].to_i * 1024) * 0.90).to_i rescue 0
+  max_fsize = ((`df -Pk #{fdir}`.split("\n")[1].split(" ")[3].to_i * 1024) * 0.90).to_i rescue 0
   fsize = max_fsize if fsize > max_fsize
-
-  FileUtils.mkdir_p(fdir) unless File.exists?(fdir)
 
   bash "Create local volume file #{fname}" do
     code "truncate -s #{fsize} #{fname}"
